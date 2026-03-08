@@ -26,7 +26,7 @@ st.title("🤖 AI Debate: Gemini 2.5 Flash Lite vs. Llama 3.3")
 def call_gemini(prompt):
     try:
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash-lite',
+            model='gemma-3-27b-it',
             contents=prompt,
         )
         return response.text
