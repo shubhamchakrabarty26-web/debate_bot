@@ -40,7 +40,7 @@ If you do not know the answer to something, state honestly that you do not know.
 def call_gemini(prompt):
     try:
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash-lite',
+            model='gemma-3-27b-it',
             contents=prompt,
         )
         return response.text
