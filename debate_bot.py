@@ -47,7 +47,7 @@ groq_tools = [
 def call_gemini(prompt):
     """Calls Gemini with native Google Search enabled."""
     response = gemini_client.models.generate_content(
-        model='gemini-2.0-flash',
+        model='gemini-2.5-flash-lite',
         contents=prompt,
         config=types.GenerateContentConfig(
             # This single line gives Gemini live Google Search access!
@@ -89,7 +89,7 @@ def call_groq(prompt):
         
         # 3. Let Llama formulate its final answer using the search results
         final_response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=messages
         )
         return final_response.choices[0].message.content
