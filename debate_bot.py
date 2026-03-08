@@ -1,104 +1,54 @@
 import streamlit as st
 from google import genai
-from google.genai import types
 from groq import Groq
-from duckduckgo_search import DDGS
-import json
+import traceback
 
-# --- Configuration for Streamlit Cloud ---
-# This pulls the keys securely from Streamlit's hidden settings
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+# --- Configuration & Secrets Handling ---
+try:
+    # Pulls keys securely from Streamlit Community Cloud Secrets
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+except KeyError:
+    st.error("🚨 Missing API Keys! Please add GEMINI_API_KEY and GROQ_API_KEY to your Streamlit App settings under 'Secrets'.")
+    st.stop()
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-groq_client = Groq(api_key=GROQ_API_KEY)
+# Initialize API clients
+try:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    groq_client = Groq(api_key=GROQ_API_KEY)
+except Exception as e:
+    st.error(f"🚨 Failed to initialize API clients: {e}")
+    st.stop()
 
-# ... [rest of the code remains exactly the same] ...
+st.title("🤖 AI Debate: Gemini 2.5 Flash Lite vs. Llama 3.3")
 
-st.title("🤖 Free Web-Surfing AI Debate: Gemini vs. Llama 3")
-
-# --- Web Search Tool for Groq ---
-def search_web(query):
-    """DuckDuckGo Search tool for Groq"""
-    try:
-        results = DDGS().text(query, max_results=3)
-        return json.dumps(results)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
-groq_tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_web",
-            "description": "Search the web for current events, facts, or up-to-date information.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query"}
-                },
-                "required": ["query"]
-            }
-        }
-    }
-]
-
-# --- AI Caller Functions ---
+# --- AI Caller Functions with Error Handling ---
 def call_gemini(prompt):
-    """Calls Gemini with native Google Search enabled."""
-    response = gemini_client.models.generate_content(
-        model='gemini-2.5-flash-lite',
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            # This single line gives Gemini live Google Search access!
-            tools=[types.Tool(google_search=types.GoogleSearch())] 
+    try:
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=prompt,
         )
-    )
-    return response.text
+        return response.text
+    except Exception as e:
+        st.error(f"🚨 Gemini API Error: {e}")
+        return None
 
 def call_groq(prompt):
-    """Calls Groq (Llama 3.3) with DuckDuckGo Search capabilities."""
-    messages = [{"role": "user", "content": prompt}]
-    
-    # 1. Ask Llama to answer, giving it access to the search tool
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,
-        tools=groq_tools,
-        tool_choice="auto"
-    )
-    
-    response_message = response.choices[0].message
-    
-    # 2. Check if Llama decided it needs to search the web
-    if response_message.tool_calls:
-        messages.append(response_message) 
-        
-        for tool_call in response_message.tool_calls:
-            if tool_call.function.name == "search_web":
-                args = json.loads(tool_call.function.arguments)
-                st.toast(f"🔎 Llama 3 is searching the web for: {args['query']}")
-                search_result = search_web(args["query"])
-                
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": "search_web",
-                    "content": search_result
-                })
-        
-        # 3. Let Llama formulate its final answer using the search results
-        final_response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=messages
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
         )
-        return final_response.choices[0].message.content
-    
-    return response_message.content
+        return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"🚨 Groq API Error: {e}")
+        st.expander("Show detailed error log").code(traceback.format_exc())
+        return None
 
 # --- UI & Debate Logic ---
-user_question = st.text_input("Ask a complex question to start the debate:")
-max_rounds = st.slider("Maximum debate rounds", 1, 5, 3)
+user_question = st.text_area("Ask a complex question to start the debate:", height=150)
+max_rounds = st.number_input("Maximum debate rounds", min_value=1, max_value=8, value=8)
 
 if st.button("Start Debate"):
     if not user_question:
@@ -107,44 +57,101 @@ if st.button("Start Debate"):
         st.write(f"**Original Question:** {user_question}")
         st.divider()
 
-        # Initial answer
-        with st.spinner("Gemini is researching..."):
-            gemini_current = call_gemini(f"Answer this question thoroughly: {user_question}")
-            st.markdown(f"**🔵 Gemini (Initial):**\n{gemini_current}")
-        
-        for i in range(max_rounds):
-            st.write(f"### Round {i+1}")
-            
-            # Llama evaluates Gemini
-            with st.spinner("Llama 3 is fact-checking Gemini..."):
-                groq_prompt = f"""
-                The user asked: "{user_question}".
-                Gemini answered: "{gemini_current}".
-                Review this answer. Search the web if you need to verify facts. 
-                If you completely agree and it is 100% accurate, reply ONLY with 'CONSENSUS REACHED'. 
-                If you disagree or have corrections, explain why and provide your improved answer.
-                """
-                groq_current = call_groq(groq_prompt)
-                
-                if "CONSENSUS REACHED" in groq_current.upper():
-                    st.success("🎉 Consensus Reached! Both models agree.")
-                    break
-                st.markdown(f"**🟢 Llama 3 (Groq):**\n{groq_current}")
+        # We will store the entire conversation here so models can reference past arguments
+        debate_history = f"Original User Question: {user_question}\n\n"
+        consensus_reached = False
 
-            # Gemini evaluates Llama
-            with st.spinner("Gemini is reviewing Llama's corrections..."):
-                gemini_prompt = f"""
-                The user asked: "{user_question}".
-                Another AI answered: "{groq_current}".
-                Review this answer. Use Google Search to verify their claims.
-                If you completely agree and it is 100% accurate, reply ONLY with 'CONSENSUS REACHED'. 
-                If you disagree or have additions, explain why and provide your improved answer.
-                """
-                gemini_current = call_gemini(gemini_prompt)
+        # --- Initial Answer by Gemini ---
+        with st.spinner("Gemini is formulating the initial response..."):
+            gemini_current = call_gemini(f"Answer this question thoroughly and state your stance: {user_question}")
+            
+        if gemini_current:
+            st.markdown(f"**🔵 Gemini (Initial):**\n{gemini_current}")
+            debate_history += f"Gemini's Initial Answer: {gemini_current}\n\n"
+            
+            # The "current_reply" is what the next model is specifically reacting to
+            current_reply = gemini_current
+            
+            # --- The Debate Loop ---
+            for i in range(max_rounds):
+                st.write(f"### Round {i+1}")
                 
-                if "CONSENSUS REACHED" in gemini_current.upper():
-                    st.success("🎉 Consensus Reached! Both models agree.")
+                # 1. Llama's Turn
+                with st.spinner("Llama 3 is analyzing and debating..."):
+                    groq_prompt = f"""
+                    Here is the debate history so far:
+                    {debate_history}
+                    
+                    The other AI just said: "{current_reply}"
+                    
+                    Your task: Evaluate their latest point regarding the original question. 
+                    - If you completely agree with everything said and have nothing to add, reply EXACTLY and ONLY with 'CONSENSUS REACHED'.
+                    - If you disagree, find flaws, or have a different perspective, explain why and provide your counter-argument.
+                    """
+                    groq_current = call_groq(groq_prompt)
+                
+                if not groq_current:
+                    st.error("Debate stopped due to Llama 3 (Groq) error.")
                     break
-                st.markdown(f"**🔵 Gemini:**\n{gemini_current}")
+                    
+                if "CONSENSUS REACHED" in groq_current.upper():
+                    st.success("🎉 Consensus Reached! Llama 3 agrees with Gemini.")
+                    consensus_reached = True
+                    break
+                    
+                st.markdown(f"**🟢 Llama 3 (Groq):**\n{groq_current}")
+                debate_history += f"Llama 3's Rebuttal (Round {i+1}): {groq_current}\n\n"
+                current_reply = groq_current
+
+                # 2. Gemini's Turn
+                with st.spinner("Gemini is analyzing Llama's rebuttal..."):
+                    gemini_prompt = f"""
+                    Here is the debate history so far:
+                    {debate_history}
+                    
+                    The other AI just said: "{current_reply}"
+                    
+                    Your task: Evaluate their latest point regarding the original question. 
+                    - If you completely agree with everything said and have nothing to add, reply EXACTLY and ONLY with 'CONSENSUS REACHED'.
+                    - If you disagree, find flaws, or have a different perspective, explain why and provide your counter-argument.
+                    """
+                    gemini_current = call_gemini(gemini_prompt)
                 
+                if not gemini_current:
+                    st.error("Debate stopped due to Gemini error.")
+                    break
+
+                if "CONSENSUS REACHED" in gemini_current.upper():
+                    st.success("🎉 Consensus Reached! Gemini agrees with Llama 3.")
+                    consensus_reached = True
+                    break
+                    
+                st.markdown(f"**🔵 Gemini:**\n{gemini_current}")
+                debate_history += f"Gemini's Rebuttal (Round {i+1}): {gemini_current}\n\n"
+                current_reply = gemini_current
+                
+            # --- Final Summary (If Max Rounds Reached Without Consensus) ---
+            if not consensus_reached:
+                st.warning(f"Max limit of {max_rounds} rounds reached without full consensus. Generating disagreement summary...")
+                with st.spinner("Calculating disagreement percentage and compiling master reply..."):
+                    summary_prompt = f"""
+                    Analyze the following debate history between two AI models regarding the user's original question:
+                    
+                    {debate_history}
+                    
+                    They did not reach a full consensus. Provide a final summary formatted exactly like this:
+                    
+                    ### Disagreement Analysis
+                    * **Estimated Disagreement:** [Insert a percentage, e.g., 20%]
+                    * **Core Disagreements:** [List bullet points of the exact specific areas where they fundamentally disagreed]
+                    
+                    ### Master Reply
+                    [Provide a synthesized final response that takes the best, most accurate, and most realistic points from BOTH sides to give the user the ultimate answer to their original question.]
+                    """
+                    final_summary = call_gemini(summary_prompt)
+                    
+                    if final_summary:
+                        st.info("### 📊 Final Disagreement Summary & Master Reply")
+                        st.markdown(final_summary)
+
         st.info("Debate concluded.")
